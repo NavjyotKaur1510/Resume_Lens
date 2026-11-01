@@ -14,6 +14,9 @@ Three modes, each mapped to a case-study objective:
                                (multiple-job matching) -> best-fit roles.
 """
 
+from html import escape
+from io import StringIO
+
 import pandas as pd
 import streamlit as st
 
@@ -29,35 +32,42 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# STYLE (kept close to the original ResumeLens dark theme)
+# STYLE
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 * { font-family: 'Inter', sans-serif; }
-.stApp { background: #08111f; color: #f1f5f9; }
+.stApp { background: #f7f9fc; color: #172033; }
 [data-testid="stDecoration"] {
   display: none;
 }
-[data-testid="stHeader"] {
-  background: transparent;
-  height: 0;
-}
+[data-testid="stHeader"] { background: transparent; height: 0; }
 .block-container { max-width: 1400px; padding: 2rem 2rem 3rem; }
 .brand { display:flex; align-items:center; gap:12px; margin-bottom:2px; }
-.brand-mark { width:38px; height:38px; border:1px solid #38bdf8; border-radius:10px;
-  display:flex; align-items:center; justify-content:center; color:#38bdf8;
-  font-size:22px; font-weight:800; background:rgba(56,189,248,.08); }
-.brand-name { font-size:30px; font-weight:800; color:#f8fafc; letter-spacing:-1px; }
-.subtitle { color:#91a3b8; font-size:14px; margin:0 0 20px 50px; }
-.metric { background:#0f1b2d; border:1px solid #243650; border-radius:14px;
-  padding:18px 20px; min-height:120px; }
-.metric-label { color:#91a3b8; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; }
-.metric-value { font-size:34px; font-weight:800; color:#f1f5f9; margin:8px 0 4px; }
-.skill-item { border:1px solid #1e3a4d; background:rgba(52,211,153,.10); color:#a7f3d0;
-  border-radius:9px; padding:8px 10px; font-size:13px; font-weight:600; margin:3px; display:inline-block;}
-.missing-item { border:1px solid #59431a; background:rgba(251,191,36,.10); color:#fde68a;
-  border-radius:9px; padding:8px 10px; font-size:13px; font-weight:600; margin:3px; display:inline-block;}
+.brand-mark { width:38px; height:38px; border:1px solid #2563eb; border-radius:10px;
+  display:flex; align-items:center; justify-content:center; color:#2563eb;
+  font-size:22px; font-weight:800; background:#eff6ff; }
+.brand-name { font-size:30px; font-weight:800; color:#172033; letter-spacing:-1px; }
+.subtitle { color:#64748b; font-size:14px; margin:0 0 20px 50px; }
+.score-card { background:#ffffff; border:1px solid #dbe3ef; border-radius:18px;
+  padding:24px; text-align:center; }
+.score-circle { width:148px; height:148px; border-radius:50%; margin:0 auto 14px;
+  display:flex; align-items:center; justify-content:center; position:relative; }
+.score-circle::before { content:""; position:absolute; width:116px; height:116px;
+  background:#ffffff; border-radius:50%; }
+.score-value { position:relative; font-size:30px; font-weight:800; color:#172033; }
+.score-status { font-size:20px; font-weight:800; color:#2563eb; margin-bottom:5px; }
+.score-note { color:#64748b; font-size:14px; line-height:1.5; }
+.result-card { background:#ffffff; border:1px solid #dbe3ef; border-radius:16px;
+  padding:20px 22px; min-height:150px; }
+.card-title { font-size:18px; font-weight:750; color:#172033; margin-bottom:8px; }
+.card-copy { color:#64748b; font-size:14px; margin-bottom:14px; }
+.skill-item, .missing-item, .extra-item { border-radius:999px; padding:8px 12px;
+  font-size:13px; font-weight:600; margin:3px; display:inline-block; }
+.skill-item { border:1px solid #a7f3d0; background:#ecfdf5; color:#047857; }
+.missing-item { border:1px solid #fed7aa; background:#fff7ed; color:#c2410c; }
+.extra-item { border:1px solid #bfdbfe; background:#eff6ff; color:#1d4ed8; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,17 +78,15 @@ st.markdown("""
   <div class="brand-name">ResumeLens Pro</div>
 </div>
 <div class="subtitle">
-NLP-based intelligent resume screening, skill extraction & context-aware job matching
+Simple resume insights for your next opportunity
 </div>
 """, unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### About")
     st.write(
-        "A hybrid NLP pipeline combining preprocessing, Named Entity "
-        "Recognition, taxonomy-based skill extraction, TF-IDF, Word2Vec "
-        "and Sentence-Transformer similarity to screen resumes against "
-        "job descriptions."
+        "Compare a resume with a job description and get clear, practical "
+        "ideas for strengthening the application."
     )
     st.markdown("### Modes")
     st.markdown(
@@ -93,90 +101,204 @@ def _read_upload(file):
     return extract_text(file)
 
 
-def _score_metrics(report):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    for col, label, key, suffix in [
-        (c1, "Final score", "final_score", ""),
-        (c2, "TF-IDF", "tfidf_score", "%"),
-        (c3, "Word2Vec", "word2vec_score", "%"),
-        (c4, "Semantic", "semantic_score", "%"),
-        (c5, "Skill coverage", "skill_coverage", "%"),
-    ]:
-        with col:
-            st.markdown(
-                f'<div class="metric"><div class="metric-label">{label}</div>'
-                f'<div class="metric-value">{report[key]}{suffix}</div></div>',
-                unsafe_allow_html=True,
-            )
-
-
 def _skill_pills(skills, css_class, empty_msg):
     if not skills:
         st.info(empty_msg)
         return
-    html = "".join(f'<span class="{css_class}">{s.title()}</span>' for s in skills)
+    html = "".join(
+        f'<span class="{css_class}">{escape(str(skill).title())}</span>'
+        for skill in skills
+    )
     st.markdown(html, unsafe_allow_html=True)
 
 
+def _match_status(score):
+    if score >= 85:
+        return "Excellent Match"
+    if score >= 70:
+        return "Good Match"
+    if score >= 50:
+        return "Moderate Match"
+    return "Needs Improvement"
+
+
+def _other_relevant_skills(report):
+    matched = {skill.lower() for skill in report["matched_skills"]}
+    return [
+        skill for skill in report["resume_skills"]
+        if skill.lower() not in matched
+    ]
+
+
+def _improvement_recommendations(report):
+    recommendations = []
+    missing = report["missing_skills"]
+    if missing:
+        skills = ", ".join(skill.title() for skill in missing[:5])
+        recommendations.append(
+            f"Add {skills} to your resume only if you genuinely have this experience."
+        )
+    if report["matched_skills"]:
+        recommendations.append(
+            "Strengthen your matched skills with a project, responsibility, or result "
+            "that shows how you used them."
+        )
+    recommendations.append(
+        "Add measurable results to project and experience descriptions, such as time "
+        "saved, revenue supported, or performance improved."
+    )
+    recommendations.append(
+        "Tailor your professional summary so it clearly reflects the target role "
+        "and the value you bring."
+    )
+    if _other_relevant_skills(report):
+        recommendations.append(
+            "Keep your additional relevant skills, but place the most job-relevant "
+            "ones where they are easiest to find."
+        )
+    return recommendations[:5]
+
+
+def _report_text(report, status, other_skills, recommendations):
+    lines = [
+        "ResumeLens Resume Analysis",
+        "==========================",
+        "",
+        f"Compatibility score: {report['final_score']}/100",
+        f"Status: {status}",
+        "",
+        "Skills you already have",
+        "-----------------------",
+        ", ".join(skill.title() for skill in report["matched_skills"]) or "None identified",
+        "",
+        "Skills not found in your resume",
+        "-------------------------------",
+        ", ".join(skill.title() for skill in report["missing_skills"]) or "None identified",
+        "",
+        "Other relevant skills",
+        "----------------------",
+        ", ".join(skill.title() for skill in other_skills) or "None identified",
+        "",
+        "How to improve your resume",
+        "--------------------------",
+    ]
+    lines.extend(f"{index}. {item}" for index, item in enumerate(recommendations, 1))
+    lines.extend([
+        "",
+        "This score is an estimate of compatibility with the supplied job description,",
+        "not a guarantee of selection.",
+    ])
+    return "\n".join(lines)
+
+
 tab1, tab2, tab3 = st.tabs(
-    ["🔍 Resume ↔ Job Match", "🏆 Rank Candidates", "🎯 Rank Jobs for a Resume"]
+    ["🔍 Resume Analyzer", "🏆 Rank Candidates", "🎯 Rank Jobs for a Resume"]
 )
 
 # ===========================================================================
 # TAB 1 — SINGLE RESUME vs SINGLE JOB
 # ===========================================================================
 with tab1:
+    st.markdown("# Resume Analyzer")
+    st.write("Find out how well your resume matches a job description.")
     left, right = st.columns(2, gap="large")
     with left:
-        st.markdown("#### Resume")
-        resume_file = st.file_uploader("Upload resume", type=["pdf", "docx", "txt"], key="single_resume")
+        st.markdown("#### Upload your resume")
+        resume_file = st.file_uploader(
+            "PDF, DOCX or TXT", type=["pdf", "docx", "txt"], key="single_resume"
+        )
     with right:
-        st.markdown("#### Job description")
-        job_text_input = st.text_area("Paste job description", height=200, key="single_job")
+        st.markdown("#### Paste the job description")
+        job_text_input = st.text_area(
+            "Include the responsibilities and skills for the role.",
+            height=230,
+            key="single_job",
+        )
 
-    if st.button("Analyze compatibility", type="primary", key="btn_single"):
+    if st.button("Analyze My Resume", type="primary", key="btn_single"):
         if not resume_file or not job_text_input.strip():
             st.error("Please provide both a resume and a job description.")
         else:
-            with st.spinner("Running preprocessing, NER, skill extraction and similarity scoring..."):
+            with st.spinner("Reviewing your resume against the job description..."):
                 resume_text = _read_upload(resume_file)
-                report = match_resume_to_job(resume_text, job_text_input)
+                if not resume_text.strip():
+                    st.error("We could not find readable text in that file. Please try another resume.")
+                else:
+                    report = match_resume_to_job(resume_text, job_text_input)
+                    status = _match_status(report["final_score"])
+                    other_skills = _other_relevant_skills(report)
+                    recommendations = _improvement_recommendations(report)
 
-            st.success("Analysis complete.")
-            _score_metrics(report)
-            st.progress(max(0.0, min(report["final_score"] / 100, 1.0)))
+                    st.success("Analysis complete.")
+                    score = max(0.0, min(report["final_score"], 100.0))
+                    score_col, explanation_col = st.columns([1, 2], gap="large")
+                    with score_col:
+                        st.markdown(
+                            f'<div class="score-card"><div class="score-circle" '
+                            f'style="background:conic-gradient(#2563eb {score}%, #e2e8f0 0)">'
+                            f'<div class="score-value">{score:.0f}</div></div>'
+                            f'<div class="score-status">{status}</div>'
+                            f'<div class="score-note">out of 100</div></div>',
+                            unsafe_allow_html=True,
+                        )
+                    with explanation_col:
+                        st.markdown("### Resume Compatibility Score")
+                        st.write(
+                            "This estimate reflects how closely the resume aligns with "
+                            "the supplied job description."
+                        )
+                        st.info(
+                            "Use this score as guidance while tailoring your resume. "
+                            "It is not a guarantee of selection."
+                        )
 
-            st.markdown("---")
-            profile_col, skills_col = st.columns(2, gap="large")
+                    st.markdown("### Skills You Already Have")
+                    with st.container(border=True):
+                        _skill_pills(
+                            report["matched_skills"],
+                            "skill-item",
+                            "No matching skills were identified.",
+                        )
 
-            with profile_col:
-                st.markdown("### Candidate profile (NER)")
-                profile = report["candidate_profile"]
-                st.write(f"**Name:** {profile['name']}")
-                st.write(f"**Email:** {profile['email'] or '—'}")
-                st.write(f"**Phone:** {profile['phone'] or '—'}")
-                st.write(f"**Education:** {', '.join(profile['education']) or '—'}")
-                st.write(f"**Estimated experience:** {profile['experience_years']} years")
-                st.write(f"**Organizations mentioned:** {', '.join(profile['organizations']) or '—'}")
+                    skill_col, extra_col = st.columns(2, gap="large")
+                    with skill_col:
+                        st.markdown("### Skills Missing From Your Resume")
+                        with st.container(border=True):
+                            st.caption("These job-related skills were not found in your resume.")
+                            _skill_pills(
+                                report["missing_skills"],
+                                "missing-item",
+                                "No additional skills were identified as missing.",
+                            )
+                    with extra_col:
+                        st.markdown("### Other Relevant Skills")
+                        with st.container(border=True):
+                            st.caption("These skills appear in your resume but were not explicitly required.")
+                            _skill_pills(
+                                other_skills,
+                                "extra-item",
+                                "No additional skills were identified.",
+                            )
 
-            with skills_col:
-                st.markdown("### Matched skills")
-                _skill_pills(report["matched_skills"], "skill-item", "No matching skills detected.")
-                st.markdown("### Missing skills")
-                _skill_pills(report["missing_skills"], "missing-item", "No missing skills — full coverage!")
+                    st.markdown("### How to Improve Your Resume")
+                    with st.container(border=True):
+                        for index, recommendation in enumerate(recommendations, 1):
+                            st.markdown(f"**{index}.** {recommendation}")
 
-            st.markdown("---")
-            st.markdown("### Skill breakdown by category")
-            cat_col1, cat_col2 = st.columns(2)
-            with cat_col1:
-                st.caption("Job description")
-                st.json(report["job_skills_by_category"])
-            with cat_col2:
-                st.caption("Resume")
-                st.json(report["resume_skills_by_category"])
+                    st.markdown("### Resume Improvement Summary")
+                    with st.container(border=True):
+                        for recommendation in recommendations[:3]:
+                            st.markdown(f"- {recommendation}")
 
-            with st.expander("Semantic skill-match details"):
-                st.dataframe(pd.DataFrame(report["skill_match_details"]), use_container_width=True)
+                    report_data = _report_text(
+                        report, status, other_skills, recommendations
+                    )
+                    st.download_button(
+                        "Download Report",
+                        data=StringIO(report_data).getvalue(),
+                        file_name="resume_analysis.txt",
+                        mime="text/plain",
+                    )
 
 # ===========================================================================
 # TAB 2 — RANK CANDIDATES (many resumes -> one job)
@@ -204,10 +326,6 @@ with tab2:
                 "Rank": r["rank"],
                 "Candidate": r["name"],
                 "Final score": r["final_score"],
-                "TF-IDF": r["tfidf_score"],
-                "Word2Vec": r["word2vec_score"],
-                "Semantic": r["semantic_score"],
-                "Skill coverage %": r["skill_coverage"],
                 "Matched skills": len(r["matched_skills"]),
                 "Missing skills": len(r["missing_skills"]),
             } for r in ranked])
@@ -263,10 +381,6 @@ with tab3:
                 "Rank": r["rank"],
                 "Job title": r["title"],
                 "Final score": r["final_score"],
-                "TF-IDF": r["tfidf_score"],
-                "Word2Vec": r["word2vec_score"],
-                "Semantic": r["semantic_score"],
-                "Skill coverage %": r["skill_coverage"],
             } for r in ranked_jobs])
             st.dataframe(table, use_container_width=True, hide_index=True)
 
@@ -274,10 +388,3 @@ with tab3:
                 with st.expander(f"#{r['rank']} — {r['title']} (score {r['final_score']})"):
                     st.write(f"**Matched:** {', '.join(r['matched_skills']) or '—'}")
                     st.write(f"**Missing:** {', '.join(r['missing_skills']) or '—'}")
-
-st.markdown("---")
-st.caption(
-    "ResumeLens Pro • Python • Streamlit • spaCy • Gensim (Word2Vec) • "
-    "Scikit-learn (TF-IDF) • Sentence-Transformers • Educational tool — "
-    "scores are an analytical aid, not a hiring decision."
-)
